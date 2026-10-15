@@ -1,4 +1,4 @@
-# Order Lifecycle Service: API test framework
+# API test framework
 
 Playwright + TypeScript API tests for the **Order Lifecycle Service**: one store, two customers, a cart, orders, cancellations, restocks and inventory. Expectations come from the service brief (`BRIEF.md`). The suite drives the HTTP API, then validates what the service wrote directly in its Postgres database.
 
