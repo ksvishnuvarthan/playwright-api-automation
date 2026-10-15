@@ -1,0 +1,387 @@
+import { ApiTestData } from './ApiTestData';
+
+/**Every unit of a SKU sits in exactly one bucket. No operation may create a unit or lose one. This is the strongest rule in the system, and it is checkable at any time.
+
+curl -s http://localhost:8080/admin/inventory/BREAD -H 'Authorization: Bearer staff-token'
+
+{"sku":"BREAD","openingQuantity":23,"netExternalAdjustment":0,
+ "buckets":{"available":20,"cartHeld":0,"reservedOnShelf":1,"reservedOffShelf":0,
+            "outbound":0,"customerHeld":2,"returnInTransit":0,
+            "pendingInspection":0,"pendingRestock":0,"writtenOff":0},
+ "accountedQuantity":23,"expectedQuantity":23,"reconciles":true}
+
+accountedQuantity is the buckets added up. expectedQuantity is openingQuantity + netExternalAdjustment. When they match, reconciles is true. If reconciles ever goes false, something is broken.
+
+Deliveries, damage and stock counts enter through one door:
+
+curl -s -X POST http://localhost:8080/admin/inventory/BREAD/adjustments \
+  -H 'Authorization: Bearer staff-token' -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: k-adj-1' \
+  -d '{"adjustmentId":"adj-001","delta":12,"reason":"Delivery received"}'
+
+Staff also manage the catalog itself:
+
+S='Authorization: Bearer staff-token'; J='Content-Type: application/json'
+curl -s -X POST http://localhost:8080/admin/catalog -H "$S" -H "$J" \
+  -H 'Idempotency-Key: k-cat-1' \
+  -d '{"sku":"TEA","name":"Tea 250 g","category":"SHELF_STABLE","priceMinor":15000,"initialStock":40}'
+curl -s -X PATCH http://localhost:8080/admin/catalog/BREAD -H "$S" -H "$J" \
+  -H 'Idempotency-Key: k-cat-2' -d '{"priceMinor":5000}'
+curl -s -X DELETE http://localhost:8080/admin/catalog/BREAD -H "$S" \
+  -H 'Idempotency-Key: k-cat-3'
+
+
+*/
+
+export const INVENTORY_TEST_DATA = {
+    INV_001: {
+        description: 'Store staff can view the inventory of a SKU',
+        api: 'inventory',
+        action: 'getInventory',
+        input: { sku: 'BREAD' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        sendIdempotencyKey: false,
+        expectedStatus: 200,
+    },
+    INV_002: {
+        description: 'Viewing the inventory of an unknown SKU returns not found',
+        api: 'inventory',
+        action: 'getInventory',
+        input: { sku: 'NOPE' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        sendIdempotencyKey: false,
+        expectedStatus: 404,
+    },
+    INV_003: {
+        description: 'A customer is forbidden from viewing inventory',
+        api: 'inventory',
+        action: 'getInventory',
+        input: { sku: 'BREAD' },
+        tokenEnvKey: 'CUSTOMER_A_TOKEN',
+        sendIdempotencyKey: false,
+        expectedStatus: 403,
+    },
+    INV_004: {
+        description: 'Viewing inventory without a token is rejected',
+        api: 'inventory',
+        action: 'getInventory',
+        input: { sku: 'BREAD' },
+        tokenEnvKey: null,
+        sendIdempotencyKey: false,
+        expectedStatus: 401,
+    },
+    INV_005: {
+        description: 'Store staff can record a delivery as a positive adjustment',
+        api: 'inventory',
+        action: 'adjust',
+        input: { sku: 'BREAD', adjustmentId: 'adj-001', delta: 12, reason: 'Delivery received' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 200,
+    },
+    INV_006: {
+        description: 'Store staff can record damage as a negative adjustment',
+        api: 'inventory',
+        action: 'adjust',
+        input: { sku: 'BREAD', adjustmentId: 'adj-002', delta: -12, reason: 'Damaged in store' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 200,
+    },
+    INV_007: {
+        description: 'An adjustment with a delta of zero is rejected',
+        api: 'inventory',
+        action: 'adjust',
+        input: { sku: 'BREAD', adjustmentId: 'adj-003', delta: 0, reason: 'Stock count' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 400,
+    },
+    INV_008: {
+        description: 'An adjustment without adjustmentId, delta and reason is rejected',
+        api: 'inventory',
+        action: 'adjust',
+        input: { sku: 'BREAD' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 400,
+    },
+    INV_009: {
+        description: 'An adjustment for an unknown SKU returns not found',
+        api: 'inventory',
+        action: 'adjust',
+        input: { sku: 'NOPE', adjustmentId: 'adj-004', delta: 1, reason: 'Stock count' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 404,
+    },
+    INV_010: {
+        description: 'An adjustment without an Idempotency-Key is rejected',
+        api: 'inventory',
+        action: 'adjust',
+        input: { sku: 'BREAD', adjustmentId: 'adj-005', delta: 1, reason: 'Stock count' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        sendIdempotencyKey: false,
+        expectedStatus: 400,
+    },
+    INV_011: {
+        description: 'A customer is forbidden from adjusting inventory',
+        api: 'inventory',
+        action: 'adjust',
+        input: { sku: 'BREAD', adjustmentId: 'adj-006', delta: 1, reason: 'Stock count' },
+        tokenEnvKey: 'CUSTOMER_A_TOKEN',
+        expectedStatus: 403,
+    },
+    INV_012: {
+        description: 'Adjusting inventory without a token is rejected',
+        api: 'inventory',
+        action: 'adjust',
+        input: { sku: 'BREAD', adjustmentId: 'adj-007', delta: 1, reason: 'Stock count' },
+        tokenEnvKey: null,
+        expectedStatus: 401,
+    },
+    INV_013: {
+        description: 'Store staff can add a catalog item',
+        api: 'catalogAdmin',
+        action: 'addItem',
+        input: { sku: 'TEA', name: 'Tea 250 g', category: 'SHELF_STABLE', priceMinor: 15000, initialStock: 40 },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 201,
+    },
+    INV_014: {
+        description: 'Adding a catalog item with a SKU that already exists is rejected',
+        api: 'catalogAdmin',
+        action: 'addItem',
+        input: { sku: 'BREAD', name: 'Duplicate Bread', category: 'SHELF_STABLE', priceMinor: 4500, initialStock: 1 },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 409,
+    },
+    INV_015: {
+        description: 'Adding a catalog item with an unknown category is rejected',
+        api: 'catalogAdmin',
+        action: 'addItem',
+        input: { sku: 'JAM', name: 'Jam 300 g', category: 'BOGUS', priceMinor: 9000, initialStock: 5 },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 400,
+    },
+    INV_016: {
+        description: 'Adding a catalog item without the required fields is rejected',
+        api: 'catalogAdmin',
+        action: 'addItem',
+        input: {},
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 400,
+    },
+    INV_017: {
+        description: 'Adding a catalog item without an Idempotency-Key is rejected',
+        api: 'catalogAdmin',
+        action: 'addItem',
+        input: { sku: 'JAM', name: 'Jam 300 g', category: 'SHELF_STABLE', priceMinor: 9000, initialStock: 5 },
+        tokenEnvKey: 'STAFF_TOKEN',
+        sendIdempotencyKey: false,
+        expectedStatus: 400,
+    },
+    INV_018: {
+        description: 'A customer is forbidden from adding a catalog item',
+        api: 'catalogAdmin',
+        action: 'addItem',
+        input: { sku: 'JAM', name: 'Jam 300 g', category: 'SHELF_STABLE', priceMinor: 9000, initialStock: 5 },
+        tokenEnvKey: 'CUSTOMER_A_TOKEN',
+        expectedStatus: 403,
+    },
+    INV_019: {
+        description: 'Store staff can change the price of a catalog item',
+        api: 'catalogAdmin',
+        action: 'updateItem',
+        input: { sku: 'TEA', priceMinor: 16000 },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 200,
+    },
+    INV_020: {
+        description: 'Changing a catalog item to a negative price is rejected',
+        api: 'catalogAdmin',
+        action: 'updateItem',
+        input: { sku: 'TEA', priceMinor: -1 },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 400,
+    },
+    INV_021: {
+        description: 'Changing a catalog item that does not exist returns not found',
+        api: 'catalogAdmin',
+        action: 'updateItem',
+        input: { sku: 'NOPE', priceMinor: 5000 },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 404,
+    },
+    INV_022: {
+        description: 'A customer is forbidden from changing a catalog item',
+        api: 'catalogAdmin',
+        action: 'updateItem',
+        input: { sku: 'TEA', priceMinor: 5000 },
+        tokenEnvKey: 'CUSTOMER_A_TOKEN',
+        expectedStatus: 403,
+    },
+    INV_023: {
+        description: 'A customer is forbidden from removing a catalog item',
+        api: 'catalogAdmin',
+        action: 'removeItem',
+        input: { sku: 'TEA' },
+        tokenEnvKey: 'CUSTOMER_A_TOKEN',
+        expectedStatus: 403,
+    },
+    INV_024: {
+        description: 'Removing a catalog item that does not exist returns not found',
+        api: 'catalogAdmin',
+        action: 'removeItem',
+        input: { sku: 'NOPE' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 404,
+    },
+    INV_025: {
+        description: 'Store staff can remove a catalog item',
+        api: 'catalogAdmin',
+        action: 'removeItem',
+        input: { sku: 'TEA' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 200,
+    },
+    INV_026: {
+        description: 'Store staff can view the inventory of RICE',
+        api: 'inventory',
+        action: 'getInventory',
+        input: { sku: 'RICE' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        sendIdempotencyKey: false,
+        expectedStatus: 200,
+    },
+    INV_027: {
+        description: 'Store staff can view the inventory of EGGS',
+        api: 'inventory',
+        action: 'getInventory',
+        input: { sku: 'EGGS' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        sendIdempotencyKey: false,
+        expectedStatus: 200,
+    },
+    INV_028: {
+        description: 'Store staff can view the inventory of COFFEE',
+        api: 'inventory',
+        action: 'getInventory',
+        input: { sku: 'COFFEE' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        sendIdempotencyKey: false,
+        expectedStatus: 200,
+    },
+    INV_029: {
+        description: 'Store staff can view the inventory of MILK',
+        api: 'inventory',
+        action: 'getInventory',
+        input: { sku: 'MILK' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        sendIdempotencyKey: false,
+        expectedStatus: 200,
+    },
+    INV_030: {
+        description: 'Store staff can view the inventory of OATS',
+        api: 'inventory',
+        action: 'getInventory',
+        input: { sku: 'OATS' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        sendIdempotencyKey: false,
+        expectedStatus: 200,
+    },
+    INV_031: {
+        description: 'Store staff can change the price of BREAD',
+        api: 'catalogAdmin',
+        action: 'updateItem',
+        input: { sku: 'BREAD', priceMinor: 5000 },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 200,
+    },
+    INV_032: {
+        description: 'Store staff take BREAD off sale',
+        api: 'catalogAdmin',
+        action: 'removeItem',
+        input: { sku: 'BREAD' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 200,
+    },
+    INV_033: {
+        description: 'Store staff rename and reprice BREAD',
+        api: 'catalogAdmin',
+        action: 'updateItem',
+        input: { sku: 'BREAD', name: 'Bread, renamed', priceMinor: 5000 },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 200,
+    },
+    INV_034: {
+        description: 'Units given up from a PLACED order go back on sale',
+        api: 'inventory',
+        action: 'getInventory',
+        input: { sku: 'RICE' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 200,
+        expectedBody: { buckets: { available: 18, reservedOnShelf: 1 }, reconciles: true },
+    },
+    INV_035: {
+        description: 'Taking out more units than exist is refused',
+        api: 'inventory',
+        action: 'adjust',
+        input: { sku: 'BREAD', adjustmentId: 'adj-020', delta: -1000, reason: 'Stock count' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 400,
+        expectedCode: 'VALIDATION_ERROR',
+    },
+    INV_036: {
+        description: 'Store staff record a delivery of 5 BREAD',
+        api: 'inventory',
+        action: 'adjust',
+        input: { sku: 'BREAD', adjustmentId: 'adj-010', delta: 5, reason: 'Delivery received' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        idempotencyKey: 'inv-adj-010',
+        expectedStatus: 200,
+        expectedBody: { netExternalAdjustment: 5, reconciles: true },
+    },
+    INV_037: {
+        description: 'Reusing an adjustmentId with a new key is refused',
+        api: 'inventory',
+        action: 'adjust',
+        input: { sku: 'BREAD', adjustmentId: 'adj-010', delta: 7, reason: 'Delivery received' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 409,
+        expectedCode: 'ADJUSTMENT_CONFLICT',
+    },
+    INV_038: {
+        description: 'Adding a catalog item with negative initial stock is refused',
+        api: 'catalogAdmin',
+        action: 'addItem',
+        input: { sku: 'JAM', name: 'Jam 300 g', category: 'SHELF_STABLE', priceMinor: 9000, initialStock: -5 },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 400,
+        expectedCode: 'VALIDATION_ERROR',
+    },
+    INV_039: {
+        description: 'Adding a catalog item without a name is refused',
+        api: 'catalogAdmin',
+        action: 'addItem',
+        input: { sku: 'JAM', category: 'SHELF_STABLE', priceMinor: 9000, initialStock: 5 },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 400,
+        expectedCode: 'VALIDATION_ERROR',
+    },
+    INV_040: {
+        description: 'Adding a catalog item with a lowercase category is refused',
+        api: 'catalogAdmin',
+        action: 'addItem',
+        input: { sku: 'JAM', name: 'Jam 300 g', category: 'shelf_stable', priceMinor: 9000, initialStock: 5 },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 400,
+        expectedCode: 'VALIDATION_ERROR',
+    },
+    INV_041: {
+        description: 'A new catalog item has its own inventory that adds up',
+        api: 'inventory',
+        action: 'getInventory',
+        input: { sku: 'TEA' },
+        tokenEnvKey: 'STAFF_TOKEN',
+        expectedStatus: 200,
+        expectedBody: { sku: 'TEA', openingQuantity: 40, reconciles: true },
+    },
+} as const satisfies Record<string, ApiTestData>;
+
+export type InventoryTestDataId = keyof typeof INVENTORY_TEST_DATA;

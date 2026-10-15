@@ -1,0 +1,7 @@
+# Copy next to the service pack's docker-compose.yml (in the unzipped order-lifecycle folder).
+# Publishes the service database on localhost:5433 (5432 is often taken) so the tests can
+# validate what the API wrote. docker compose picks this file up automatically.
+services:
+  db:
+    ports:
+      - "5433:5432"
