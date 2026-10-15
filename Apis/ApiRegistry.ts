@@ -1,5 +1,5 @@
-import { APIRequestContext, APIResponse } from '@playwright/test';
-import { TokenEnvKey } from './BaseApi';
+import { APIRequestContext } from '@playwright/test';
+import { BaseApi, TokenEnvKey } from './BaseApi';
 import { CartApi } from './CartApi';
 import { CatalogAdminApi } from './CatalogAdminApi';
 import { CatalogApi } from './CatalogApi';
@@ -8,8 +8,8 @@ import { OrderOperationsApi } from './OrderOperationsApi';
 import { OrdersApi } from './OrdersApi';
 import { TestHarnessApi } from './TestHarnessApi';
 
-/** Every API, by the name test data uses to refer to it. */
-export const API_CLIENTS = {
+/** Every API class, by the name test data uses for it (`api: 'cart'`). */
+const APIS = {
     catalog: CatalogApi,
     cart: CartApi,
     orders: OrdersApi,
@@ -17,20 +17,28 @@ export const API_CLIENTS = {
     inventory: InventoryApi,
     catalogAdmin: CatalogAdminApi,
     testHarness: TestHarnessApi,
-} as const;
+};
 
-export type ApiName = keyof typeof API_CLIENTS;
+export type ApiName = keyof typeof APIS;
 
-type ApiInstance<N extends ApiName> = InstanceType<(typeof API_CLIENTS)[N]>;
+/** The method names of one API, e.g. ApiMethod<'cart'> is 'getCart' | 'addItem' | 'setQuantity' | 'removeItem' | 'clear'. */
+type ApiMethod<Name extends ApiName> = keyof InstanceType<(typeof APIS)[Name]>;
 
-/** Public methods of an API that make a call. */
-export type ApiActionOf<N extends ApiName> = {
-    [K in keyof ApiInstance<N>]: ApiInstance<N>[K] extends (...args: any[]) => Promise<APIResponse> ? K : never;
-}[keyof ApiInstance<N>];
+/**
+ * Which API and which of its methods a test case calls.
+ * Pairing them here lets TypeScript reject a method the API does not have,
+ * e.g. { api: 'cart', action: 'placeOrder' }. Add a line when you add an API.
+ */
+export type ApiCall =
+    | { api: 'catalog'; action: ApiMethod<'catalog'> }
+    | { api: 'cart'; action: ApiMethod<'cart'> }
+    | { api: 'orders'; action: ApiMethod<'orders'> }
+    | { api: 'orderOperations'; action: ApiMethod<'orderOperations'> }
+    | { api: 'inventory'; action: ApiMethod<'inventory'> }
+    | { api: 'catalogAdmin'; action: ApiMethod<'catalogAdmin'> }
+    | { api: 'testHarness'; action: ApiMethod<'testHarness'> };
 
-/** A valid { api, action } pair, e.g. { api: 'cart', action: 'addItem' }. */
-export type ApiActionRef = { [N in ApiName]: { api: N; action: ApiActionOf<N> } }[ApiName];
-
-export function createApi<N extends ApiName>(api: N, request: APIRequestContext, tokenEnvKey: TokenEnvKey | null): ApiInstance<N> {
-    return new API_CLIENTS[api](request, tokenEnvKey) as ApiInstance<N>;
+/** Creates the API class for a name, sending the given role's token. */
+export function createApi(name: ApiName, request: APIRequestContext, tokenEnvKey: TokenEnvKey | null): BaseApi {
+    return new APIS[name](request, tokenEnvKey);
 }
